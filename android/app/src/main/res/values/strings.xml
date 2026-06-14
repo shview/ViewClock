@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">View Clock</string>
+    <string name="device_admin_description">用于验证 Android 官方 Lock Task 与 Device Owner 能力。</string>
+    <string name="accessibility_service_description">可选验证：观察前台窗口变化。当前版本不会自动执行返回或点击操作。</string>
+</resources>
