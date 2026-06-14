@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../native_demo/presentation/native_demo_page.dart';
 import '../application/focus_controller.dart';
@@ -114,7 +115,8 @@ class _HomeTab extends StatelessWidget {
               leading: CircleAvatar(child: Text('${mode.focusMinutes}')),
               title: Text(mode.name),
               subtitle: Text(
-                '${mode.focusMinutes} 分钟 · ${mode.lockStrength.label}锁定'
+                '${mode.focusMinutes}+${mode.breakMinutes} 分钟'
+                ' · ${mode.cycles} 轮 · ${mode.lockStrength.label}锁定'
                 ' · 白名单 ${mode.whitelist.length}',
               ),
               onTap: () => _start(context, mode),
@@ -149,7 +151,8 @@ class _HomeTab extends StatelessWidget {
       builder: (context) => AlertDialog(
         title: Text('开始“${mode.name}”？'),
         content: Text(
-          '将专注 ${mode.focusMinutes} 分钟。当前版本使用轻度监控，'
+          '每轮专注 ${mode.focusMinutes} 分钟、休息 ${mode.breakMinutes} 分钟，'
+          '共 ${mode.cycles} 轮。当前版本使用轻度监控，'
           '离开白名单会记录，但不会强制拉回。',
         ),
         actions: [
@@ -204,6 +207,7 @@ class ActiveFocusPage extends StatefulWidget {
 class _ActiveFocusPageState extends State<ActiveFocusPage> {
   Timer? _timer;
   Duration _remaining = Duration.zero;
+  bool _transitioning = false;
 
   @override
   void initState() {
@@ -212,13 +216,16 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
-  void _tick() {
+  Future<void> _tick() async {
     final active = widget.controller.activeFocus;
     if (active == null) return;
     final remaining = active.endsAt.difference(DateTime.now());
     if (remaining <= Duration.zero) {
-      _timer?.cancel();
-      unawaited(widget.controller.finish(completed: true));
+      if (_transitioning) return;
+      _transitioning = true;
+      await widget.controller.advancePhase();
+      _transitioning = false;
+      if (mounted) _tick();
       return;
     }
     final unlock = active.unlockUntil;
@@ -238,7 +245,8 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
   Widget build(BuildContext context) {
     final active = widget.controller.activeFocus!;
     final mode = widget.controller.activeMode!;
-    final totalSeconds = mode.focusMinutes * 60;
+    final isBreak = active.phase == FocusPhase.breakTime;
+    final totalSeconds = (isBreak ? mode.breakMinutes : mode.focusMinutes) * 60;
     final remainingSeconds = _remaining.inSeconds
         .clamp(0, totalSeconds)
         .toInt();
@@ -246,7 +254,10 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
     final unlockRemaining = active.unlockUntil?.difference(DateTime.now());
     final isUnlocked = unlockRemaining != null && !unlockRemaining.isNegative;
     return Scaffold(
-      appBar: AppBar(title: Text(mode.name), automaticallyImplyLeading: false),
+      appBar: AppBar(
+        title: Text(isBreak ? '${mode.name} · 休息' : mode.name),
+        automaticallyImplyLeading: false,
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -278,7 +289,11 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
                               style: Theme.of(context).textTheme.displayMedium,
                             ),
                             Text(
-                              isUnlocked ? '临时解锁中' : '正在专注',
+                              isBreak
+                                  ? '休息中'
+                                  : isUnlocked
+                                  ? '临时解锁中'
+                                  : '正在专注',
                               textAlign: TextAlign.center,
                             ),
                           ],
@@ -295,24 +310,43 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
                 alignment: WrapAlignment.center,
                 children: [
                   Chip(
-                    avatar: const Icon(Icons.shield_outlined, size: 18),
-                    label: Text('${mode.lockStrength.label}锁定'),
-                  ),
-                  Chip(
-                    avatar: const Icon(Icons.warning_amber, size: 18),
-                    label: Text('离开 ${active.violations} 次'),
-                  ),
-                  Chip(
-                    avatar: const Icon(Icons.lock_open, size: 18),
+                    avatar: Icon(
+                      isBreak ? Icons.coffee_outlined : Icons.shield_outlined,
+                      size: 18,
+                    ),
                     label: Text(
-                      '临时解锁 ${active.temporaryUnlocks}/'
-                      '${mode.temporaryUnlockLimit}',
+                      isBreak ? '休息阶段' : '${mode.lockStrength.label}锁定',
                     ),
                   ),
+                  Chip(
+                    avatar: const Icon(Icons.repeat, size: 18),
+                    label: Text('第 ${active.currentCycle}/${mode.cycles} 轮'),
+                  ),
+                  if (!isBreak) ...[
+                    Chip(
+                      avatar: const Icon(Icons.warning_amber, size: 18),
+                      label: Text('离开 ${active.violations} 次'),
+                    ),
+                    Chip(
+                      avatar: const Icon(Icons.lock_open, size: 18),
+                      label: Text(
+                        '临时解锁 ${active.temporaryUnlocks}/'
+                        '${mode.temporaryUnlockLimit}',
+                      ),
+                    ),
+                  ],
                 ],
               ),
               const Spacer(),
-              if (isUnlocked)
+              if (isBreak)
+                FilledButton.tonalIcon(
+                  onPressed: widget.controller.skipBreak,
+                  icon: const Icon(Icons.skip_next),
+                  label: Text(
+                    active.currentCycle >= mode.cycles ? '完成本次专注' : '跳过休息',
+                  ),
+                )
+              else if (isUnlocked)
                 Text('将在 ${_format(unlockRemaining)} 后恢复监控')
               else
                 FilledButton.tonalIcon(
@@ -430,6 +464,35 @@ class _HistoryTab extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       children: [
         Text('专注记录', style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 16),
+        Card(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _Metric(
+                    value: '${controller.weekFocusedSeconds ~/ 60}',
+                    label: '本周分钟',
+                  ),
+                ),
+                Expanded(
+                  child: _Metric(
+                    value: '${controller.monthFocusedSeconds ~/ 60}',
+                    label: '本月分钟',
+                  ),
+                ),
+                Expanded(
+                  child: _Metric(
+                    value: '${(controller.completionRate * 100).round()}%',
+                    label: '完成率',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 16),
         for (final session in controller.sessions) ...[
           Card(
@@ -578,6 +641,21 @@ class _SettingsTab extends StatelessWidget {
       const SizedBox(height: 12),
       Card(
         child: ListTile(
+          leading: const Icon(Icons.import_export),
+          title: const Text('数据导入与导出'),
+          subtitle: const Text('完整模式、白名单和专注记录 JSON 备份'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push<void>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BackupPage(controller: controller),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Card(
+        child: ListTile(
           leading: const Icon(Icons.bug_report_outlined),
           title: const Text('原生能力与调试'),
           subtitle: const Text('包含 Device Owner 状态查询，但不会自动启用'),
@@ -601,4 +679,117 @@ class _SettingsTab extends StatelessWidget {
       ),
     ],
   );
+}
+
+class BackupPage extends StatefulWidget {
+  const BackupPage({super.key, required this.controller});
+
+  final FocusController controller;
+
+  @override
+  State<BackupPage> createState() => _BackupPageState();
+}
+
+class _BackupPageState extends State<BackupPage> {
+  final _input = TextEditingController();
+  String? _message;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('数据导入与导出')),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Card(
+          child: ListTile(
+            leading: Icon(Icons.info_outline),
+            title: Text('本地 JSON 备份'),
+            subtitle: Text(
+              '导出不会包含进行中的会话。导入会替换模式和历史，'
+              '执行前会把当前数据备份到剪贴板。',
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: _export,
+          icon: const Icon(Icons.copy_all),
+          label: const Text('复制全部数据到剪贴板'),
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _input,
+          minLines: 8,
+          maxLines: 16,
+          decoration: const InputDecoration(
+            labelText: '粘贴 View Clock JSON',
+            alignLabelWithHint: true,
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _paste,
+          icon: const Icon(Icons.content_paste),
+          label: const Text('从剪贴板粘贴'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.tonalIcon(
+          onPressed: _import,
+          icon: const Icon(Icons.file_download_done),
+          label: const Text('校验并导入'),
+        ),
+        if (_message != null) ...[
+          const SizedBox(height: 16),
+          Text(_message!, textAlign: TextAlign.center),
+        ],
+      ],
+    ),
+  );
+
+  Future<void> _export() async {
+    await Clipboard.setData(
+      ClipboardData(text: widget.controller.exportJson()),
+    );
+    setState(() => _message = '完整备份已复制到剪贴板');
+  }
+
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null) _input.text = data!.text!;
+  }
+
+  Future<void> _import() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导入并替换当前数据？'),
+        content: const Text('当前模式和历史会被替换，旧数据将先备份到剪贴板。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final backup = await widget.controller.importJson(_input.text);
+      await Clipboard.setData(ClipboardData(text: backup));
+      if (mounted) setState(() => _message = '导入成功；旧数据已复制到剪贴板');
+    } catch (error) {
+      if (mounted) setState(() => _message = '导入失败：$error');
+    }
+  }
 }

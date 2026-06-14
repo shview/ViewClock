@@ -40,6 +40,31 @@ class FocusController extends ChangeNotifier {
         .fold(0, (sum, session) => sum + session.focusedSeconds);
   }
 
+  int focusedSecondsSince(DateTime start) => sessions
+      .where((session) => !session.endedAt.isBefore(start))
+      .fold(0, (sum, session) => sum + session.focusedSeconds);
+
+  int get weekFocusedSeconds {
+    final now = DateTime.now();
+    final start = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: now.weekday - 1));
+    return focusedSecondsSince(start);
+  }
+
+  int get monthFocusedSeconds {
+    final now = DateTime.now();
+    return focusedSecondsSince(DateTime(now.year, now.month));
+  }
+
+  double get completionRate {
+    if (sessions.isEmpty) return 0;
+    return sessions.where((session) => session.completed).length /
+        sessions.length;
+  }
+
   Future<void> initialize() async {
     try {
       final raw = await bridge.readAppState();
@@ -117,6 +142,7 @@ class FocusController extends ChangeNotifier {
       modeId: mode.id,
       startedAt: now,
       endsAt: now.add(Duration(minutes: mode.focusMinutes)),
+      phase: FocusPhase.focus,
     );
     await _persist();
     await _startMonitor();
@@ -126,7 +152,9 @@ class FocusController extends ChangeNotifier {
   Future<void> temporaryUnlock(Duration duration) async {
     final active = activeFocus;
     final mode = activeMode;
-    if (active == null || mode == null) return;
+    if (active == null || mode == null || active.phase != FocusPhase.focus) {
+      return;
+    }
     if (active.temporaryUnlocks >= mode.temporaryUnlockLimit) return;
     activeFocus = active.copyWith(
       temporaryUnlocks: active.temporaryUnlocks + 1,
@@ -157,11 +185,16 @@ class FocusController extends ChangeNotifier {
     final mode = activeMode;
     if (active == null || mode == null) return;
     final endedAt = DateTime.now();
-    final elapsed = endedAt
-        .difference(active.startedAt)
-        .inSeconds
-        .clamp(0, mode.focusMinutes * 60)
-        .toInt();
+    final currentSegment = active.phase == FocusPhase.focus
+        ? endedAt
+              .difference(
+                active.endsAt.subtract(Duration(minutes: mode.focusMinutes)),
+              )
+              .inSeconds
+              .clamp(0, mode.focusMinutes * 60)
+              .toInt()
+        : 0;
+    final elapsed = active.focusedSecondsBeforePhase + currentSegment;
     sessions.insert(
       0,
       FocusSession(
@@ -170,7 +203,7 @@ class FocusController extends ChangeNotifier {
         modeName: mode.name,
         startedAt: active.startedAt,
         endedAt: endedAt,
-        plannedMinutes: mode.focusMinutes,
+        plannedMinutes: mode.focusMinutes * mode.cycles,
         focusedSeconds: elapsed,
         completed: completed,
         violations: active.violations,
@@ -184,8 +217,110 @@ class FocusController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> advancePhase() async {
+    final active = activeFocus;
+    final mode = activeMode;
+    if (active == null || mode == null) return;
+    final now = DateTime.now();
+    if (active.phase == FocusPhase.focus) {
+      final focused = active.focusedSecondsBeforePhase + mode.focusMinutes * 60;
+      await bridge.stopFocusMonitor();
+      if (mode.breakMinutes <= 0 && active.currentCycle >= mode.cycles) {
+        activeFocus = active.copyWith(
+          focusedSecondsBeforePhase: focused,
+          endsAt: now,
+        );
+        await finish(completed: true);
+        return;
+      }
+      if (mode.breakMinutes <= 0) {
+        activeFocus = active.copyWith(
+          phase: FocusPhase.focus,
+          currentCycle: active.currentCycle + 1,
+          focusedSecondsBeforePhase: focused,
+          endsAt: now.add(Duration(minutes: mode.focusMinutes)),
+          clearUnlock: true,
+        );
+        await _persist();
+        await _startMonitor();
+        notifyListeners();
+        return;
+      }
+      activeFocus = active.copyWith(
+        phase: FocusPhase.breakTime,
+        focusedSecondsBeforePhase: focused,
+        endsAt: now.add(Duration(minutes: mode.breakMinutes)),
+        clearUnlock: true,
+      );
+      await _persist();
+      notifyListeners();
+      return;
+    }
+
+    if (active.currentCycle >= mode.cycles) {
+      await finish(completed: true);
+      return;
+    }
+    activeFocus = active.copyWith(
+      phase: FocusPhase.focus,
+      currentCycle: active.currentCycle + 1,
+      endsAt: now.add(Duration(minutes: mode.focusMinutes)),
+      clearUnlock: true,
+    );
+    await _persist();
+    await _startMonitor();
+    notifyListeners();
+  }
+
+  Future<void> skipBreak() async {
+    if (activeFocus?.phase != FocusPhase.breakTime) return;
+    await advancePhase();
+  }
+
+  String exportJson() => const JsonEncoder.withIndent(
+    '  ',
+  ).convert(_stateMap(includeActiveFocus: false));
+
+  Future<String> importJson(String raw) async {
+    if (activeFocus != null) {
+      throw StateError('专注进行中不能导入数据');
+    }
+    final backup = exportJson();
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) throw const FormatException('JSON 根节点必须是对象');
+    final json = Map<String, Object?>.from(decoded);
+    final importedModes = (json['modes'] as List? ?? const [])
+        .map(
+          (item) => FocusMode.fromJson(Map<String, Object?>.from(item as Map)),
+        )
+        .toList();
+    final importedSessions = (json['sessions'] as List? ?? const [])
+        .map(
+          (item) =>
+              FocusSession.fromJson(Map<String, Object?>.from(item as Map)),
+        )
+        .toList();
+    if (importedModes.isEmpty) {
+      throw const FormatException('备份中至少需要一个专注模式');
+    }
+    modes
+      ..clear()
+      ..addAll(importedModes);
+    sessions
+      ..clear()
+      ..addAll(importedSessions);
+    activeFocus = null;
+    await _persist();
+    notifyListeners();
+    return backup;
+  }
+
   Future<void> _startMonitor() async {
-    if (!usageAccessGranted || activeFocus == null) return;
+    if (!usageAccessGranted ||
+        activeFocus == null ||
+        activeFocus?.phase != FocusPhase.focus) {
+      return;
+    }
     await bridge.startFocusMonitor(activeMode?.whitelist ?? const []);
   }
 
@@ -198,14 +333,15 @@ class FocusController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _persist() => bridge.writeAppState(
-    jsonEncode({
-      'schemaVersion': 1,
-      'modes': modes.map((mode) => mode.toJson()).toList(),
-      'sessions': sessions.map((session) => session.toJson()).toList(),
-      'activeFocus': activeFocus?.toJson(),
-    }),
-  );
+  Map<String, Object?> _stateMap({bool includeActiveFocus = true}) => {
+    'schemaVersion': 2,
+    'exportedAt': DateTime.now().toIso8601String(),
+    'modes': modes.map((mode) => mode.toJson()).toList(),
+    'sessions': sessions.map((session) => session.toJson()).toList(),
+    'activeFocus': includeActiveFocus ? activeFocus?.toJson() : null,
+  };
+
+  Future<void> _persist() => bridge.writeAppState(jsonEncode(_stateMap()));
 
   List<FocusMode> _defaultModes() => const [
     FocusMode(
@@ -215,6 +351,7 @@ class FocusController extends ChangeNotifier {
       breakMinutes: 5,
       lockStrength: LockStrength.light,
       whitelist: [],
+      cycles: 4,
     ),
     FocusMode(
       id: 'deep_focus',
@@ -223,6 +360,7 @@ class FocusController extends ChangeNotifier {
       breakMinutes: 10,
       lockStrength: LockStrength.light,
       whitelist: [],
+      cycles: 1,
     ),
   ];
 

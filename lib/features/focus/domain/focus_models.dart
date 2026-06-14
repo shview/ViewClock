@@ -1,5 +1,7 @@
 enum LockStrength { light, medium }
 
+enum FocusPhase { focus, breakTime }
+
 extension LockStrengthLabel on LockStrength {
   String get label => switch (this) {
     LockStrength.light => '轻度',
@@ -16,6 +18,7 @@ class FocusMode {
     required this.lockStrength,
     required this.whitelist,
     this.temporaryUnlockLimit = 2,
+    this.cycles = 1,
   });
 
   final String id;
@@ -25,6 +28,7 @@ class FocusMode {
   final LockStrength lockStrength;
   final List<String> whitelist;
   final int temporaryUnlockLimit;
+  final int cycles;
 
   FocusMode copyWith({
     String? name,
@@ -33,6 +37,7 @@ class FocusMode {
     LockStrength? lockStrength,
     List<String>? whitelist,
     int? temporaryUnlockLimit,
+    int? cycles,
   }) {
     return FocusMode(
       id: id,
@@ -42,6 +47,7 @@ class FocusMode {
       lockStrength: lockStrength ?? this.lockStrength,
       whitelist: whitelist ?? this.whitelist,
       temporaryUnlockLimit: temporaryUnlockLimit ?? this.temporaryUnlockLimit,
+      cycles: cycles ?? this.cycles,
     );
   }
 
@@ -53,6 +59,7 @@ class FocusMode {
     'lockStrength': lockStrength.name,
     'whitelist': whitelist,
     'temporaryUnlockLimit': temporaryUnlockLimit,
+    'cycles': cycles,
   };
 
   factory FocusMode.fromJson(Map<String, Object?> json) => FocusMode(
@@ -63,6 +70,7 @@ class FocusMode {
     lockStrength: LockStrength.values.byName(json['lockStrength']! as String),
     whitelist: List<String>.from(json['whitelist'] as List? ?? const []),
     temporaryUnlockLimit: json['temporaryUnlockLimit'] as int? ?? 2,
+    cycles: json['cycles'] as int? ?? 1,
   );
 }
 
@@ -128,6 +136,9 @@ class ActiveFocus {
     required this.modeId,
     required this.startedAt,
     required this.endsAt,
+    this.phase = FocusPhase.focus,
+    this.currentCycle = 1,
+    this.focusedSecondsBeforePhase = 0,
     this.violations = 0,
     this.temporaryUnlocks = 0,
     this.unlockUntil,
@@ -137,6 +148,9 @@ class ActiveFocus {
   final String modeId;
   final DateTime startedAt;
   final DateTime endsAt;
+  final FocusPhase phase;
+  final int currentCycle;
+  final int focusedSecondsBeforePhase;
   final int violations;
   final int temporaryUnlocks;
   final DateTime? unlockUntil;
@@ -146,11 +160,20 @@ class ActiveFocus {
     int? temporaryUnlocks,
     DateTime? unlockUntil,
     bool clearUnlock = false,
+    DateTime? startedAt,
+    DateTime? endsAt,
+    FocusPhase? phase,
+    int? currentCycle,
+    int? focusedSecondsBeforePhase,
   }) => ActiveFocus(
     id: id,
     modeId: modeId,
-    startedAt: startedAt,
-    endsAt: endsAt,
+    startedAt: startedAt ?? this.startedAt,
+    endsAt: endsAt ?? this.endsAt,
+    phase: phase ?? this.phase,
+    currentCycle: currentCycle ?? this.currentCycle,
+    focusedSecondsBeforePhase:
+        focusedSecondsBeforePhase ?? this.focusedSecondsBeforePhase,
     violations: violations ?? this.violations,
     temporaryUnlocks: temporaryUnlocks ?? this.temporaryUnlocks,
     unlockUntil: clearUnlock ? null : unlockUntil ?? this.unlockUntil,
@@ -161,6 +184,9 @@ class ActiveFocus {
     'modeId': modeId,
     'startedAt': startedAt.toIso8601String(),
     'endsAt': endsAt.toIso8601String(),
+    'phase': phase.name,
+    'currentCycle': currentCycle,
+    'focusedSecondsBeforePhase': focusedSecondsBeforePhase,
     'violations': violations,
     'temporaryUnlocks': temporaryUnlocks,
     'unlockUntil': unlockUntil?.toIso8601String(),
@@ -171,6 +197,11 @@ class ActiveFocus {
     modeId: json['modeId']! as String,
     startedAt: DateTime.parse(json['startedAt']! as String),
     endsAt: DateTime.parse(json['endsAt']! as String),
+    phase: FocusPhase.values.byName(
+      json['phase'] as String? ?? FocusPhase.focus.name,
+    ),
+    currentCycle: json['currentCycle'] as int? ?? 1,
+    focusedSecondsBeforePhase: json['focusedSecondsBeforePhase'] as int? ?? 0,
     violations: json['violations'] as int? ?? 0,
     temporaryUnlocks: json['temporaryUnlocks'] as int? ?? 0,
     unlockUntil: json['unlockUntil'] == null

@@ -19,6 +19,8 @@ class ModeEditorPage extends StatefulWidget {
 class _ModeEditorPageState extends State<ModeEditorPage> {
   late final TextEditingController _name;
   late double _minutes;
+  late double _breakMinutes;
+  late double _cycles;
   late double _unlockLimit;
   late List<String> _whitelist;
 
@@ -27,6 +29,8 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
     super.initState();
     _name = TextEditingController(text: widget.mode?.name ?? '自定义专注');
     _minutes = (widget.mode?.focusMinutes ?? 30).toDouble();
+    _breakMinutes = (widget.mode?.breakMinutes ?? 5).toDouble();
+    _cycles = (widget.mode?.cycles ?? 1).toDouble();
     _unlockLimit = (widget.mode?.temporaryUnlockLimit ?? 2).toDouble();
     _whitelist = [...?widget.mode?.whitelist];
   }
@@ -72,6 +76,30 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
           max: 120,
           divisions: 119,
           onChanged: (value) => setState(() => _minutes = value),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          '休息时长：${_breakMinutes.round()} 分钟',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        Slider(
+          value: _breakMinutes,
+          min: 0,
+          max: 30,
+          divisions: 30,
+          onChanged: (value) => setState(() => _breakMinutes = value),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          '循环次数：${_cycles.round()} 轮',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        Slider(
+          value: _cycles,
+          min: 1,
+          max: 8,
+          divisions: 7,
+          onChanged: (value) => setState(() => _cycles = value),
         ),
         const SizedBox(height: 16),
         Text(
@@ -122,10 +150,11 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
       id: old?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
       name: _name.text.trim().isEmpty ? '未命名模式' : _name.text.trim(),
       focusMinutes: _minutes.round(),
-      breakMinutes: old?.breakMinutes ?? 5,
+      breakMinutes: _breakMinutes.round(),
       lockStrength: LockStrength.light,
       whitelist: _whitelist,
       temporaryUnlockLimit: _unlockLimit.round(),
+      cycles: _cycles.round(),
     );
     await widget.controller.saveMode(mode);
     if (mounted) Navigator.pop(context);
