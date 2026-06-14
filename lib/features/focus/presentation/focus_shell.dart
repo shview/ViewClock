@@ -394,7 +394,11 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
                       size: 18,
                     ),
                     label: Text(
-                      isBreak ? '休息阶段' : '${mode.lockStrength.label}锁定',
+                      isBreak
+                          ? '休息阶段'
+                          : mode.lockStrength == LockStrength.medium
+                          ? '中度：自动返回'
+                          : '轻度：仅记录',
                     ),
                   ),
                   Chip(

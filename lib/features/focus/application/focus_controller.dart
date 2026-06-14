@@ -21,7 +21,6 @@ class FocusController extends ChangeNotifier {
   String? lastError;
   String? blockedPackage;
   StreamSubscription<Map<String, Object?>>? _events;
-  String? _lastViolationPackage;
   DateTime? _lastViolationAt;
 
   FocusMode? get activeMode {
@@ -365,23 +364,24 @@ class FocusController extends ChangeNotifier {
         activeFocus == null) {
       return;
     }
+    final mediumMode = activeMode?.lockStrength == LockStrength.medium;
+    if (mediumMode && type == 'violationDetected') return;
+    if (!mediumMode && type == 'appBlocked') return;
     final active = activeFocus!;
     if (active.unlockUntil?.isAfter(DateTime.now()) ?? false) return;
     final packageName = event['packageName'] as String?;
     final timestamp = DateTime.fromMillisecondsSinceEpoch(
       event['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
-    if (packageName == _lastViolationPackage &&
-        _lastViolationAt != null &&
+    if (_lastViolationAt != null &&
         timestamp.difference(_lastViolationAt!).abs() <
-            const Duration(seconds: 10)) {
+            const Duration(seconds: 3)) {
       if (type == 'appBlocked') {
         blockedPackage = packageName;
         notifyListeners();
       }
       return;
     }
-    _lastViolationPackage = packageName;
     _lastViolationAt = timestamp;
     if (type == 'appBlocked') blockedPackage = packageName;
     activeFocus = active.copyWith(violations: active.violations + 1);

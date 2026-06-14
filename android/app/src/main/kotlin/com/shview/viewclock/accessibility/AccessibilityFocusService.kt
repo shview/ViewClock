@@ -19,27 +19,39 @@ class AccessibilityFocusService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        if (event == null ||
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        ) {
+            return
+        }
         val packageName = event.packageName?.toString()?.takeIf { it.isNotBlank() } ?: return
         if (!::enforcementStore.isInitialized || !enforcementStore.shouldBlock(packageName)) {
             return
         }
         val now = System.currentTimeMillis()
-        if (packageName == lastBlockedPackage && now - lastBlockedAt < BLOCK_DEBOUNCE_MILLIS) {
+        if (now - lastBlockedAt < BLOCK_DEBOUNCE_MILLIS) {
             return
         }
         lastBlockedPackage = packageName
         lastBlockedAt = now
-        startActivity(
-            Intent(this, MainActivity::class.java)
-                .addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
-                )
-                .putExtra(EXTRA_BLOCKED_PACKAGE, packageName)
-                .putExtra(EXTRA_BLOCKED_AT, now),
-        )
+        val launchIntent = packageManager
+            .getLaunchIntentForPackage(this.packageName)
+            ?: Intent(this, MainActivity::class.java)
+        runCatching {
+            startActivity(
+                launchIntent
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    )
+                    .putExtra(EXTRA_BLOCKED_PACKAGE, packageName)
+                    .putExtra(EXTRA_BLOCKED_AT, now),
+            )
+        }.onFailure {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -47,7 +59,7 @@ class AccessibilityFocusService : AccessibilityService() {
     companion object {
         const val EXTRA_BLOCKED_PACKAGE = "blockedPackage"
         const val EXTRA_BLOCKED_AT = "blockedAt"
-        private const val BLOCK_DEBOUNCE_MILLIS = 10_000L
+        private const val BLOCK_DEBOUNCE_MILLIS = 3_000L
 
         fun isEnabled(context: Context): Boolean {
             val expected = ComponentName(
