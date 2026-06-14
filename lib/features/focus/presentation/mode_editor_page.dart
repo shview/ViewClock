@@ -41,7 +41,15 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: Text(widget.mode == null ? '新建模式' : '编辑模式'),
-      actions: [TextButton(onPressed: _save, child: const Text('保存'))],
+      actions: [
+        if (widget.mode != null)
+          IconButton(
+            tooltip: '删除模式',
+            onPressed: _delete,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        TextButton(onPressed: _save, child: const Text('保存')),
+      ],
     ),
     body: ListView(
       padding: const EdgeInsets.all(20),
@@ -121,6 +129,38 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
     );
     await widget.controller.saveMode(mode);
     if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _delete() async {
+    final mode = widget.mode;
+    if (mode == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除这个模式？'),
+        content: Text('“${mode.name}”将被删除，已有专注历史不会受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.controller.deleteMode(mode.id);
+      if (mounted) Navigator.pop(context);
+    } on StateError catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+    }
   }
 }
 

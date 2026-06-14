@@ -96,4 +96,57 @@ void main() {
     expect(find.text('View Clock'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('session details can be opened and deleted', (tester) async {
+    final now = DateTime.now();
+    storedState = jsonEncode({
+      'schemaVersion': 1,
+      'modes': [
+        {
+          'id': 'test',
+          'name': '测试专注',
+          'focusMinutes': 25,
+          'breakMinutes': 5,
+          'lockStrength': 'light',
+          'whitelist': <String>[],
+          'temporaryUnlockLimit': 2,
+        },
+      ],
+      'sessions': [
+        {
+          'id': 'session',
+          'modeId': 'test',
+          'modeName': '测试专注',
+          'startedAt': now
+              .subtract(const Duration(minutes: 20))
+              .toIso8601String(),
+          'endedAt': now.toIso8601String(),
+          'plannedMinutes': 25,
+          'focusedSeconds': 1200,
+          'completed': false,
+          'violations': 2,
+          'temporaryUnlocks': 1,
+          'failureReason': '用户提前结束',
+        },
+      ],
+      'activeFocus': null,
+    });
+
+    await tester.pumpWidget(const FocusLockApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('记录'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试专注'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('实际专注'), findsOneWidget);
+    expect(find.text('用户提前结束'), findsOneWidget);
+
+    await tester.tap(find.text('删除这条记录'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('还没有专注记录'), findsOneWidget);
+  });
 }

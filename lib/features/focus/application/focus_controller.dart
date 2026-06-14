@@ -92,6 +92,24 @@ class FocusController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> deleteMode(String modeId) async {
+    if (activeFocus?.modeId == modeId) {
+      throw StateError('进行中的模式不能删除');
+    }
+    if (modes.length <= 1) {
+      throw StateError('至少保留一个专注模式');
+    }
+    modes.removeWhere((mode) => mode.id == modeId);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> deleteSession(String sessionId) async {
+    sessions.removeWhere((session) => session.id == sessionId);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> startFocus(FocusMode mode) async {
     final now = DateTime.now();
     activeFocus = ActiveFocus(

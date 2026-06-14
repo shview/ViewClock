@@ -447,6 +447,7 @@ class _HistoryTab extends StatelessWidget {
                 '离开 ${session.violations} 次',
               ),
               trailing: Text(session.completed ? '完成' : '失败'),
+              onTap: () => _showDetails(context, session),
             ),
           ),
           const SizedBox(height: 10),
@@ -459,6 +460,86 @@ class _HistoryTab extends StatelessWidget {
       '${value.month}月${value.day}日 '
       '${value.hour.toString().padLeft(2, '0')}:'
       '${value.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _showDetails(BuildContext context, FocusSession session) async {
+    final delete = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text(
+                session.modeName,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 16),
+              _DetailRow(label: '结果', value: session.completed ? '完成' : '失败'),
+              _DetailRow(
+                label: '实际专注',
+                value: '${session.focusedSeconds ~/ 60} 分钟',
+              ),
+              _DetailRow(label: '计划时长', value: '${session.plannedMinutes} 分钟'),
+              _DetailRow(label: '离开次数', value: '${session.violations}'),
+              _DetailRow(label: '临时解锁', value: '${session.temporaryUnlocks}'),
+              if (session.failureReason != null)
+                _DetailRow(label: '失败原因', value: session.failureReason!),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(context, true),
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('删除这条记录'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (delete != true || !context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除专注记录？'),
+        content: const Text('删除后统计会同步更新，此操作无法撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await controller.deleteSession(session.id);
+    }
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      children: [
+        Expanded(child: Text(label)),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+    ),
+  );
 }
 
 class _SettingsTab extends StatelessWidget {
