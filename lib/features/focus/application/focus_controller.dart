@@ -15,9 +15,14 @@ class FocusController extends ChangeNotifier {
   final List<FocusSession> sessions = [];
   ActiveFocus? activeFocus;
   bool usageAccessGranted = false;
+  bool accessibilityEnabled = false;
+  bool notificationPermissionGranted = false;
   bool loading = true;
   String? lastError;
+  String? blockedPackage;
   StreamSubscription<Map<String, Object?>>? _events;
+  String? _lastViolationPackage;
+  DateTime? _lastViolationAt;
 
   FocusMode? get activeMode {
     final id = activeFocus?.modeId;
@@ -90,6 +95,9 @@ class FocusController extends ChangeNotifier {
         if (modes.isEmpty) modes.addAll(_defaultModes());
       }
       usageAccessGranted = await bridge.isUsageAccessGranted();
+      accessibilityEnabled = await bridge.isAccessibilityEnabled();
+      notificationPermissionGranted = await bridge
+          .isNotificationPermissionGranted();
       _events = bridge.events.listen(_handleNativeEvent);
       if (activeFocus != null) await _startMonitor();
     } catch (error) {
@@ -103,6 +111,15 @@ class FocusController extends ChangeNotifier {
 
   Future<void> refreshPermission() async {
     usageAccessGranted = await bridge.isUsageAccessGranted();
+    accessibilityEnabled = await bridge.isAccessibilityEnabled();
+    notificationPermissionGranted = await bridge
+        .isNotificationPermissionGranted();
+    notifyListeners();
+  }
+
+  Future<void> requestNotificationPermission() async {
+    notificationPermissionGranted = await bridge
+        .requestNotificationPermission();
     notifyListeners();
   }
 
@@ -136,6 +153,18 @@ class FocusController extends ChangeNotifier {
   }
 
   Future<void> startFocus(FocusMode mode) async {
+    await refreshPermission();
+    if (mode.lockStrength == LockStrength.medium) {
+      if (!usageAccessGranted) {
+        throw StateError('中度锁定需要先开启使用情况访问权限');
+      }
+      if (!notificationPermissionGranted) {
+        throw StateError('中度锁定需要先开启通知权限');
+      }
+      if (!accessibilityEnabled) {
+        throw StateError('中度锁定需要先手动开启 View Clock 无障碍服务');
+      }
+    }
     final now = DateTime.now();
     activeFocus = ActiveFocus(
       id: now.microsecondsSinceEpoch.toString(),
@@ -317,19 +346,52 @@ class FocusController extends ChangeNotifier {
 
   Future<void> _startMonitor() async {
     if (!usageAccessGranted ||
+        !notificationPermissionGranted ||
         activeFocus == null ||
         activeFocus?.phase != FocusPhase.focus) {
       return;
     }
-    await bridge.startFocusMonitor(activeMode?.whitelist ?? const []);
+    await bridge.startFocusMonitor(
+      activeMode?.whitelist ?? const [],
+      enforce:
+          activeMode?.lockStrength == LockStrength.medium &&
+          accessibilityEnabled,
+    );
   }
 
   void _handleNativeEvent(Map<String, Object?> event) {
-    if (event['type'] != 'violationDetected' || activeFocus == null) return;
+    final type = event['type'];
+    if ((type != 'violationDetected' && type != 'appBlocked') ||
+        activeFocus == null) {
+      return;
+    }
     final active = activeFocus!;
     if (active.unlockUntil?.isAfter(DateTime.now()) ?? false) return;
+    final packageName = event['packageName'] as String?;
+    final timestamp = DateTime.fromMillisecondsSinceEpoch(
+      event['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+    );
+    if (packageName == _lastViolationPackage &&
+        _lastViolationAt != null &&
+        timestamp.difference(_lastViolationAt!).abs() <
+            const Duration(seconds: 10)) {
+      if (type == 'appBlocked') {
+        blockedPackage = packageName;
+        notifyListeners();
+      }
+      return;
+    }
+    _lastViolationPackage = packageName;
+    _lastViolationAt = timestamp;
+    if (type == 'appBlocked') blockedPackage = packageName;
     activeFocus = active.copyWith(violations: active.violations + 1);
     unawaited(_persist());
+    notifyListeners();
+  }
+
+  void clearBlockedPackage() {
+    if (blockedPackage == null) return;
+    blockedPackage = null;
     notifyListeners();
   }
 

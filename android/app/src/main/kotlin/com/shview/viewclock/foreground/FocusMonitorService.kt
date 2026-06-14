@@ -10,11 +10,13 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import com.shview.viewclock.R
+import com.shview.viewclock.accessibility.FocusEnforcementStore
 import com.shview.viewclock.usage.UsageAccessHelper
 
 class FocusMonitorService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var usageAccessHelper: UsageAccessHelper
+    private lateinit var enforcementStore: FocusEnforcementStore
     private var whitelist: Set<String> = emptySet()
     private var lastPackage: String? = null
 
@@ -59,6 +61,7 @@ class FocusMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         usageAccessHelper = UsageAccessHelper(this)
+        enforcementStore = FocusEnforcementStore(this)
         createNotificationChannel()
     }
 
@@ -68,6 +71,11 @@ class FocusMonitorService : Service() {
             .orEmpty()
             .plus(packageName)
             .toSet()
+        enforcementStore.update(
+            active = true,
+            enforce = intent?.getBooleanExtra(EXTRA_ENFORCE, false) == true,
+            whitelist = whitelist,
+        )
         startForeground(
             NOTIFICATION_ID,
             Notification.Builder(this, CHANNEL_ID)
@@ -85,6 +93,7 @@ class FocusMonitorService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(pollRunnable)
+        enforcementStore.clear()
         emit(mapOf("type" to "monitorStateChanged", "running" to false))
         super.onDestroy()
     }
@@ -117,17 +126,19 @@ class FocusMonitorService : Service() {
         private const val CHANNEL_ID = "focus_monitor"
         private const val NOTIFICATION_ID = 1001
         private const val EXTRA_WHITELIST = "whitelist"
+        private const val EXTRA_ENFORCE = "enforce"
         private const val POLL_INTERVAL_MILLIS = 1_000L
 
-        fun start(context: Context, whitelist: List<String>) {
+        fun start(context: Context, whitelist: List<String>, enforce: Boolean) {
             val intent = Intent(context, FocusMonitorService::class.java).putStringArrayListExtra(
                 EXTRA_WHITELIST,
                 ArrayList(whitelist),
-            )
+            ).putExtra(EXTRA_ENFORCE, enforce)
             context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
+            FocusEnforcementStore(context).clear()
             context.stopService(Intent(context, FocusMonitorService::class.java))
         }
     }

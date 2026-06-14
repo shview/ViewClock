@@ -22,6 +22,7 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
   late double _breakMinutes;
   late double _cycles;
   late double _unlockLimit;
+  late LockStrength _lockStrength;
   late List<String> _whitelist;
 
   @override
@@ -32,6 +33,7 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
     _breakMinutes = (widget.mode?.breakMinutes ?? 5).toDouble();
     _cycles = (widget.mode?.cycles ?? 1).toDouble();
     _unlockLimit = (widget.mode?.temporaryUnlockLimit ?? 2).toDouble();
+    _lockStrength = widget.mode?.lockStrength ?? LockStrength.light;
     _whitelist = [...?widget.mode?.whitelist];
   }
 
@@ -114,11 +116,38 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
           onChanged: (value) => setState(() => _unlockLimit = value),
         ),
         const SizedBox(height: 16),
-        const ListTile(
+        SegmentedButton<LockStrength>(
+          segments: const [
+            ButtonSegment(
+              value: LockStrength.light,
+              icon: Icon(Icons.notifications_none),
+              label: Text('轻度'),
+            ),
+            ButtonSegment(
+              value: LockStrength.medium,
+              icon: Icon(Icons.shield_outlined),
+              label: Text('中度'),
+            ),
+          ],
+          selected: {_lockStrength},
+          onSelectionChanged: (value) {
+            setState(() => _lockStrength = value.single);
+          },
+        ),
+        const SizedBox(height: 8),
+        ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.shield_outlined),
-          title: Text('轻度锁定'),
-          subtitle: Text('记录离开白名单的行为，不自动拉回。主力机默认使用此模式。'),
+          leading: Icon(
+            _lockStrength == LockStrength.medium
+                ? Icons.accessibility_new
+                : Icons.info_outline,
+          ),
+          title: Text('${_lockStrength.label}锁定'),
+          subtitle: Text(
+            _lockStrength == LockStrength.medium
+                ? '需要手动开启无障碍服务。发现非白名单应用时返回 View Clock；系统设置、系统界面和默认拨号保留为安全出口。'
+                : '记录离开白名单的行为，不自动拉回。',
+          ),
         ),
         Card(
           child: ListTile(
@@ -151,7 +180,7 @@ class _ModeEditorPageState extends State<ModeEditorPage> {
       name: _name.text.trim().isEmpty ? '未命名模式' : _name.text.trim(),
       focusMinutes: _minutes.round(),
       breakMinutes: _breakMinutes.round(),
-      lockStrength: LockStrength.light,
+      lockStrength: _lockStrength,
       whitelist: _whitelist,
       temporaryUnlockLimit: _unlockLimit.round(),
       cycles: _cycles.round(),

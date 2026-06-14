@@ -141,19 +141,60 @@ class _HomeTab extends StatelessWidget {
               onTap: controller.bridge.openUsageAccessSettings,
             ),
           ),
+        if (!controller.notificationPermissionGranted) ...[
+          const SizedBox(height: 10),
+          Card(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: ListTile(
+              leading: const Icon(Icons.notifications_off_outlined),
+              title: const Text('通知权限未开启'),
+              subtitle: const Text('前台监控需要显示持续通知；未授权时仅保留倒计时。'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: controller.requestNotificationPermission,
+            ),
+          ),
+        ],
       ],
     );
   }
 
   Future<void> _start(BuildContext context, FocusMode mode) async {
+    await controller.refreshPermission();
+    if (!context.mounted) return;
+    if (mode.lockStrength == LockStrength.medium &&
+        !controller.accessibilityEnabled) {
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('需要开启无障碍服务'),
+          content: const Text(
+            '中度模式只监听前台应用切换，不读取界面内容，也不会自动点击。'
+            '授权必须由你在系统设置中手动确认。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('暂不开启'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('打开设置'),
+            ),
+          ],
+        ),
+      );
+      if (openSettings == true) {
+        await controller.bridge.openAccessibilitySettings();
+      }
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text('开始“${mode.name}”？'),
         content: Text(
           '每轮专注 ${mode.focusMinutes} 分钟、休息 ${mode.breakMinutes} 分钟，'
-          '共 ${mode.cycles} 轮。当前版本使用轻度监控，'
-          '离开白名单会记录，但不会强制拉回。',
+          '共 ${mode.cycles} 轮。${mode.lockStrength == LockStrength.medium ? '非白名单应用会被返回到 View Clock。' : '离开白名单会记录，但不会自动拉回。'}',
         ),
         actions: [
           TextButton(
@@ -167,7 +208,16 @@ class _HomeTab extends StatelessWidget {
         ],
       ),
     );
-    if (confirmed == true) await controller.startFocus(mode);
+    if (confirmed == true) {
+      try {
+        await controller.startFocus(mode);
+      } on StateError catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+      }
+    }
   }
 
   Future<void> _editMode(BuildContext context, FocusMode? mode) async {
@@ -253,6 +303,12 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
     final progress = 1 - remainingSeconds / totalSeconds;
     final unlockRemaining = active.unlockUntil?.difference(DateTime.now());
     final isUnlocked = unlockRemaining != null && !unlockRemaining.isNegative;
+    final blockedPackage = widget.controller.blockedPackage;
+    final mediumUnavailable =
+        mode.lockStrength == LockStrength.medium &&
+        (!widget.controller.usageAccessGranted ||
+            !widget.controller.notificationPermissionGranted ||
+            !widget.controller.accessibilityEnabled);
     return Scaffold(
       appBar: AppBar(
         title: Text(isBreak ? '${mode.name} · 休息' : mode.name),
@@ -263,6 +319,29 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
           padding: const EdgeInsets.all(24),
           child: Column(
             children: [
+              if (mediumUnavailable && !isBreak)
+                Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: const ListTile(
+                    leading: Icon(Icons.warning_amber_rounded),
+                    title: Text('中度锁定权限已失效'),
+                    subtitle: Text('当前会话已降级为仅倒计时和可用能力；请结束后到设置页重新授权。'),
+                  ),
+                ),
+              if (blockedPackage != null && !isBreak)
+                Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: ListTile(
+                    leading: const Icon(Icons.block),
+                    title: const Text('已阻止打开非白名单应用'),
+                    subtitle: Text(blockedPackage),
+                    trailing: IconButton(
+                      tooltip: '关闭提示',
+                      onPressed: widget.controller.clearBlockedPackage,
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
+                ),
               const Spacer(),
               SizedBox(
                 width: double.infinity,
@@ -362,6 +441,7 @@ class _ActiveFocusPageState extends State<ActiveFocusPage> {
                 onPressed: () => _confirmStop(context),
                 child: const Text('提前结束并记为失败'),
               ),
+              const SizedBox(height: 40),
             ],
           ),
         ),
@@ -628,6 +708,32 @@ class _SettingsTab extends StatelessWidget {
               title: const Text('使用情况访问权限'),
               subtitle: Text(controller.usageAccessGranted ? '已开启' : '未开启'),
               onTap: controller.bridge.openUsageAccessSettings,
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: Icon(
+                controller.notificationPermissionGranted
+                    ? Icons.check_circle
+                    : Icons.warning_amber,
+              ),
+              title: const Text('通知权限'),
+              subtitle: Text(
+                controller.notificationPermissionGranted ? '已开启' : '未开启',
+              ),
+              onTap: controller.requestNotificationPermission,
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: Icon(
+                controller.accessibilityEnabled
+                    ? Icons.check_circle
+                    : Icons.warning_amber,
+              ),
+              title: const Text('无障碍中度锁定'),
+              subtitle: Text(
+                controller.accessibilityEnabled ? '已开启' : '未开启；仅中度模式需要',
+              ),
+              onTap: controller.bridge.openAccessibilitySettings,
             ),
             const Divider(height: 1),
             ListTile(

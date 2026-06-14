@@ -1,8 +1,10 @@
 package com.shview.viewclock.bridge
 
 import android.app.Activity
+import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -32,6 +34,8 @@ class NativeBridge(
     private val iconExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
+    private var notificationPermissionResult: MethodChannel.Result? = null
+    private var pendingBlockedEvent: Map<String, Any?>? = null
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -101,12 +105,31 @@ class NativeBridge(
                 "isAccessibilityEnabled" ->
                     result.success(AccessibilityFocusService.isEnabled(activity))
                 "openAccessibilitySettings" -> {
-                    activity.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    val component = ComponentName(
+                        activity,
+                        AccessibilityFocusService::class.java,
+                    )
+                    val detailsIntent = Intent(
+                        "android.settings.ACCESSIBILITY_DETAILS_SETTINGS",
+                    )
+                        .putExtra(Intent.EXTRA_COMPONENT_NAME, component)
+                    runCatching { activity.startActivity(detailsIntent) }
+                        .getOrElse {
+                            activity.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+                            )
+                        }
                     result.success(null)
+                }
+                "isNotificationPermissionGranted" ->
+                    result.success(isNotificationPermissionGranted())
+                "requestNotificationPermission" -> {
+                    requestNotificationPermission(result)
                 }
                 "startFocusMonitor" -> {
                     val whitelist = call.argument<List<String>>("whitelist").orEmpty()
-                    FocusMonitorService.start(activity, whitelist)
+                    val enforce = call.argument<Boolean>("enforce") ?: false
+                    FocusMonitorService.start(activity, whitelist, enforce)
                     result.success(null)
                 }
                 "stopFocusMonitor" -> {
@@ -126,6 +149,10 @@ class NativeBridge(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         eventSink = events
+        pendingBlockedEvent?.let {
+            events.success(it)
+            pendingBlockedEvent = null
+        }
     }
 
     override fun onCancel(arguments: Any?) {
@@ -134,6 +161,44 @@ class NativeBridge(
 
     override fun onMonitorEvent(event: Map<String, Any?>) {
         activity.runOnUiThread { eventSink?.success(event) }
+    }
+
+    fun handleIntent(intent: Intent?) {
+        val packageName = intent
+            ?.getStringExtra(AccessibilityFocusService.EXTRA_BLOCKED_PACKAGE)
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        val event = mapOf(
+            "type" to "appBlocked",
+            "packageName" to packageName,
+            "timestamp" to intent.getLongExtra(
+                AccessibilityFocusService.EXTRA_BLOCKED_AT,
+                System.currentTimeMillis(),
+            ),
+        )
+        activity.runOnUiThread {
+            val sink = eventSink
+            if (sink == null) {
+                pendingBlockedEvent = event
+            } else {
+                sink.success(event)
+            }
+        }
+        intent.removeExtra(AccessibilityFocusService.EXTRA_BLOCKED_PACKAGE)
+        intent.removeExtra(AccessibilityFocusService.EXTRA_BLOCKED_AT)
+    }
+
+    fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return false
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        notificationPermissionResult?.success(granted)
+        notificationPermissionResult = null
+        return true
     }
 
     fun dispose() {
@@ -158,9 +223,35 @@ class NativeBridge(
         ).flattenToShortString(),
     )
 
+    private fun isNotificationPermissionGranted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestNotificationPermission(result: MethodChannel.Result) {
+        if (isNotificationPermissionGranted()) {
+            result.success(true)
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success(true)
+            return
+        }
+        if (notificationPermissionResult != null) {
+            result.error("request_in_progress", "通知权限请求正在进行", null)
+            return
+        }
+        notificationPermissionResult = result
+        activity.requestPermissions(
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            NOTIFICATION_PERMISSION_REQUEST,
+        )
+    }
+
     companion object {
         private const val METHOD_CHANNEL = "focus_lock/native"
         private const val EVENT_CHANNEL = "focus_lock/events"
         private const val APP_STATE_KEY = "app_state_json"
+        private const val NOTIFICATION_PERMISSION_REQUEST = 4102
     }
 }

@@ -5,7 +5,7 @@ enum FocusPhase { focus, breakTime }
 extension LockStrengthLabel on LockStrength {
   String get label => switch (this) {
     LockStrength.light => '轻度',
-    LockStrength.medium => '中度（仅预留）',
+    LockStrength.medium => '中度',
   };
 }
 

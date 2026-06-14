@@ -18,6 +18,8 @@ void main() {
           return switch (call.method) {
             'readAppState' => storedState,
             'isUsageAccessGranted' => true,
+            'isAccessibilityEnabled' => false,
+            'isNotificationPermissionGranted' => true,
             'writeAppState' => null,
             'startFocusMonitor' => null,
             'stopFocusMonitor' => null,

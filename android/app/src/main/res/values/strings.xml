@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">View Clock</string>
     <string name="device_admin_description">用于验证 Android 官方 Lock Task 与 Device Owner 能力。</string>
-    <string name="accessibility_service_description">可选验证：观察前台窗口变化。当前版本不会自动执行返回或点击操作。</string>
+    <string name="accessibility_service_description">用于用户主动选择的中度专注模式：仅观察前台应用切换，发现非白名单应用时返回 View Clock；不读取界面内容、不自动点击。</string>
 </resources>

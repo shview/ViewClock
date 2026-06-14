@@ -9,9 +9,12 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeBridge extends NativeFocusBridge {
   String? state;
   bool monitorRunning = false;
+  bool accessibilityEnabled = false;
+  bool? enforce;
+  final eventController = StreamController<Map<String, Object?>>.broadcast();
 
   @override
-  Stream<Map<String, Object?>> get events => const Stream.empty();
+  Stream<Map<String, Object?>> get events => eventController.stream;
 
   @override
   Future<String?> readAppState() async => state;
@@ -23,13 +26,27 @@ class _FakeBridge extends NativeFocusBridge {
   Future<bool> isUsageAccessGranted() async => true;
 
   @override
-  Future<void> startFocusMonitor(List<String> whitelist) async {
+  Future<bool> isAccessibilityEnabled() async => accessibilityEnabled;
+
+  @override
+  Future<bool> isNotificationPermissionGranted() async => true;
+
+  @override
+  Future<void> startFocusMonitor(
+    List<String> whitelist, {
+    bool enforce = false,
+  }) async {
     monitorRunning = true;
+    this.enforce = enforce;
   }
 
   @override
   Future<void> stopFocusMonitor() async {
     monitorRunning = false;
+  }
+
+  Future<void> disposeBridge() async {
+    await eventController.close();
   }
 }
 
@@ -56,6 +73,7 @@ void main() {
 
     expect(controller.modes.single.cycles, 1);
     controller.dispose();
+    await bridge.disposeBridge();
   });
 
   test('focus advances to break and then next cycle', () async {
@@ -84,6 +102,7 @@ void main() {
     expect(controller.activeFocus?.currentCycle, 2);
     expect(bridge.monitorRunning, isTrue);
     controller.dispose();
+    await bridge.disposeBridge();
   });
 
   test('last break completes the whole session', () async {
@@ -110,6 +129,7 @@ void main() {
     expect(controller.sessions.first.completed, isTrue);
     expect(controller.sessions.first.focusedSeconds, 60);
     controller.dispose();
+    await bridge.disposeBridge();
   });
 
   test('export excludes active session and import validates modes', () async {
@@ -133,5 +153,64 @@ void main() {
       throwsA(isA<FormatException>()),
     );
     controller.dispose();
+    await bridge.disposeBridge();
+  });
+
+  test('medium mode requires accessibility and enables enforcement', () async {
+    final bridge = _FakeBridge();
+    final controller = FocusController(bridge: bridge);
+    await controller.initialize();
+    const mode = FocusMode(
+      id: 'medium',
+      name: '中度测试',
+      focusMinutes: 1,
+      breakMinutes: 0,
+      lockStrength: LockStrength.medium,
+      whitelist: [],
+    );
+    await controller.saveMode(mode);
+
+    await expectLater(controller.startFocus(mode), throwsA(isA<StateError>()));
+
+    bridge.accessibilityEnabled = true;
+    await controller.startFocus(mode);
+    expect(bridge.monitorRunning, isTrue);
+    expect(bridge.enforce, isTrue);
+    controller.dispose();
+    await bridge.disposeBridge();
+  });
+
+  test('duplicate usage and accessibility events count once', () async {
+    final bridge = _FakeBridge()..accessibilityEnabled = true;
+    final controller = FocusController(bridge: bridge);
+    await controller.initialize();
+    const mode = FocusMode(
+      id: 'medium',
+      name: '中度测试',
+      focusMinutes: 1,
+      breakMinutes: 0,
+      lockStrength: LockStrength.medium,
+      whitelist: [],
+    );
+    await controller.saveMode(mode);
+    await controller.startFocus(mode);
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    bridge.eventController.add({
+      'type': 'violationDetected',
+      'packageName': 'example.blocked',
+      'timestamp': now,
+    });
+    bridge.eventController.add({
+      'type': 'appBlocked',
+      'packageName': 'example.blocked',
+      'timestamp': now + 100,
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.activeFocus?.violations, 1);
+    expect(controller.blockedPackage, 'example.blocked');
+    controller.dispose();
+    await bridge.disposeBridge();
   });
 }

@@ -3,15 +3,52 @@ package com.shview.viewclock.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import com.shview.viewclock.MainActivity
 
 class AccessibilityFocusService : AccessibilityService() {
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    private lateinit var enforcementStore: FocusEnforcementStore
+    private var lastBlockedPackage: String? = null
+    private var lastBlockedAt = 0L
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        enforcementStore = FocusEnforcementStore(this)
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val packageName = event.packageName?.toString()?.takeIf { it.isNotBlank() } ?: return
+        if (!::enforcementStore.isInitialized || !enforcementStore.shouldBlock(packageName)) {
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (packageName == lastBlockedPackage && now - lastBlockedAt < BLOCK_DEBOUNCE_MILLIS) {
+            return
+        }
+        lastBlockedPackage = packageName
+        lastBlockedAt = now
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                )
+                .putExtra(EXTRA_BLOCKED_PACKAGE, packageName)
+                .putExtra(EXTRA_BLOCKED_AT, now),
+        )
+    }
 
     override fun onInterrupt() = Unit
 
     companion object {
+        const val EXTRA_BLOCKED_PACKAGE = "blockedPackage"
+        const val EXTRA_BLOCKED_AT = "blockedAt"
+        private const val BLOCK_DEBOUNCE_MILLIS = 10_000L
+
         fun isEnabled(context: Context): Boolean {
             val expected = ComponentName(
                 context,

@@ -62,8 +62,19 @@ class NativeFocusBridge {
   Future<void> openAccessibilitySettings() =>
       _methodChannel.invokeMethod<void>('openAccessibilitySettings');
 
-  Future<void> startFocusMonitor(List<String> whitelist) => _methodChannel
-      .invokeMethod<void>('startFocusMonitor', {'whitelist': whitelist});
+  Future<bool> isNotificationPermissionGranted() =>
+      _boolMethod('isNotificationPermissionGranted');
+
+  Future<bool> requestNotificationPermission() =>
+      _boolMethod('requestNotificationPermission');
+
+  Future<void> startFocusMonitor(
+    List<String> whitelist, {
+    bool enforce = false,
+  }) => _methodChannel.invokeMethod<void>('startFocusMonitor', {
+    'whitelist': whitelist,
+    'enforce': enforce,
+  });
 
   Future<void> stopFocusMonitor() =>
       _methodChannel.invokeMethod<void>('stopFocusMonitor');
